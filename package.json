@@ -1,0 +1,32 @@
+{
+  "name": "@tnkshuuhei/foundry-template",
+  "description": "Template repo for creating smart contracts with Hardhat and Foundry",
+  "version": "1.0.0",
+  "author": {
+    "name": "Shuhei Tanaka",
+    "url": "https://github.com/tnkshuuhei"
+  },
+  "keywords": [
+    "hardhat",
+    "foundry",
+    "smart contract",
+    "ethereum",
+    "solidity",
+    "blockchain"
+  ],
+  "private": true,
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-foundry": "^1.1.3",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.17"
+  },
+  "scripts": {
+    "clean": "rm -rf cache out",
+    "build": "forge clean && forge build",
+    "test": "forge clean && forge test",
+    "coverage": "forge clean && forge coverage",
+    "deploy:UUPS-sepolia": "forge clean && forge script script/DeployUUPS.s.sol --rpc-url sepolia --broadcast --etherscan-api-key $ETHERSCAN_KEY --verify",
+    "upgrade": "forge clean && forge script script/UpgradeUUPS.s.sol --rpc-url sepolia --broadcast --etherscan-api-key $ETHERSCAN_KEY --verify"
+  }
+}

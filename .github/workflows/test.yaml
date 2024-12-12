@@ -1,0 +1,68 @@
+name: "TEST"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  build:
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Check out the repo"
+        uses: "actions/checkout@v4"
+
+      - name: "Install Foundry"
+        uses: "foundry-rs/foundry-toolchain@v1"
+        with:
+          version: nightly
+
+      - name: "Install foundry libs"
+        run: "forge install"
+
+      - name: "Build the contracts"
+        run: "forge build"
+
+      - name: "Add build summary"
+        run: |
+          echo "## Build result" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Passed" >> $GITHUB_STEP_SUMMARY
+
+  test:
+    needs: ["build"]
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Check out the repo"
+        uses: "actions/checkout@v4"
+
+      - name: "Install Foundry"
+        uses: "foundry-rs/foundry-toolchain@v1"
+        with:
+          version: nightly
+
+      - name: "Install pnpm"
+        uses: "pnpm/action-setup@v4"
+        with:
+          version: 9.5.0
+          run_install: true
+
+      - name: "Install pnpm dependencies"
+        run: "pnpm install"
+
+      - name: "Install foundry libs"
+        run: "forge install"
+
+      - name: "Build the contracts"
+        run: "pnpm build"
+
+      - name: "Show the Foundry config"
+        run: "forge config"
+
+      - name: "Run the test"
+        run: "pnpm test"
+
+      - name: "Add test summary"
+        run: |
+          echo "## Tests result" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Passed" >> $GITHUB_STEP_SUMMARY
