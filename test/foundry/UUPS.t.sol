@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.28;
 
-import { Test, console } from "forge-std/Test.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { Test } from "forge-std/Test.sol";
 import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import { UUPS } from "../../contracts/UUPS.sol";
 
@@ -15,16 +13,16 @@ contract UUPSV2 is UUPS {
 }
 
 contract UUPSTest is Test {
-    address currentPrankee;
-    address admin = makeAddr("admin");
-    address minter = makeAddr("minter");
-    address pauser = makeAddr("pauser");
-    address alice = makeAddr("alice");
-    address bob = makeAddr("bob");
-    address charlie = makeAddr("charlie");
+    address public currentPrankee;
+    address public admin = makeAddr("admin");
+    address public minter = makeAddr("minter");
+    address public pauser = makeAddr("pauser");
+    address public alice = makeAddr("alice");
+    address public bob = makeAddr("bob");
+    address public charlie = makeAddr("charlie");
 
     UUPS public uups;
-    address proxy;
+    address public proxy;
 
     event CredentialGranted(address indexed account, uint256 amount);
     event CredentialBurned(address indexed account, uint256 amount);

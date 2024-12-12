@@ -395,13 +395,13 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
         emit ClaimerSet(_previousClaimer, claimer_);
         return address(claimer_);
     }
+
     /**
      * @notice Set yield fee percentage.
      * @dev Yield fee is represented in 9 decimals and can't exceed `1e9`.
      * @param yieldFeePercentage_ Yield fee percentage
      * return uint256 New yield fee percentage
      */
-
     function setYieldFeePercentage(uint256 yieldFeePercentage_) external onlyOwner returns (uint256) {
         uint256 _previousYieldFeePercentage = _yieldFeePercentage;
         _setYieldFeePercentage(yieldFeePercentage_);
@@ -521,6 +521,7 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
     function _increaseYieldFeeBalance(uint256 _shares) internal {
         _yieldFeeTotalSupply += _shares;
     }
+
     /* ============ Conversion Functions ============ */
 
     /// @inheritdoc ERC4626
