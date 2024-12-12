@@ -29,6 +29,12 @@ error YieldFeePercentageGTPrecision(uint256 yieldFeePercentage, uint256 feePreci
 /// @param max The max amount of shares that can be minted to the receiver
 error MintGTMax(uint256 shares, address receiver, uint256 max);
 
+/// @notice Emitted when the amount being deposited for the receiver is greater than the max amount allowed
+/// @param receiver The receiver of the deposit
+/// @param amount The amount to deposit
+/// @param max The max deposit amount allowed
+error DepositMoreThanMax(address receiver, uint256 amount, uint256 max);
+
 contract Vault is ERC4626, ERC20Permit, Ownable {
     using Math for uint256;
     using SafeERC20 for IERC20;
@@ -81,6 +87,9 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
 
     /// @notice Underlying asset unit (i.e. 10 ** 18 for DAI).
     uint256 private _assetUnit;
+
+    /// @notice Most recent exchange rate recorded when burning or minting Vault shares.
+    uint256 private _lastRecordedExchangeRate;
 
     /// @notice Yield fee percentage represented in 9 decimal places and in decimal notation (i.e. 10000000 = 0.01 =
     /// 1%).
@@ -156,6 +165,117 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
     }
 
     /* ============ External Functions ============ */
+    /* ============ Deposit Functions ============ */
+
+    /// @inheritdoc ERC4626
+    function deposit(uint256 _assets, address _receiver) public virtual override returns (uint256) {
+        if (_assets > maxDeposit(_receiver)) {
+            revert DepositMoreThanMax(_receiver, _assets, maxDeposit(_receiver));
+        }
+
+        uint256 _shares = _convertToShares(_assets, Math.Rounding.Floor);
+        _deposit(msg.sender, _receiver, _assets, _shares);
+
+        return _shares;
+    }
+
+    /**
+     * @notice Approve underlying asset with permit, deposit into the Vault and mint Vault shares to `_receiver`.
+     * @param _assets Amount of assets to approve and deposit
+     * @param _receiver Address of the receiver of the vault shares
+     * @param _deadline Timestamp after which the approval is no longer valid
+     * @param _v V part of the secp256k1 signature
+     * @param _r R part of the secp256k1 signature
+     * @param _s S part of the secp256k1 signature
+     * @return uint256 Amount of Vault shares minted to `_receiver`.
+     */
+    function depositWithPermit(
+        uint256 _assets,
+        address _receiver,
+        uint256 _deadline,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        external
+        returns (uint256)
+    {
+        _permit(IERC20Permit(asset()), msg.sender, address(this), _assets, _deadline, _v, _r, _s);
+        return deposit(_assets, _receiver);
+    }
+
+    /// @inheritdoc ERC4626
+    function mint(uint256 _shares, address _receiver) public virtual override returns (uint256) {
+        uint256 _assets = _beforeMint(_shares, _receiver);
+
+        _deposit(msg.sender, _receiver, _assets, _shares);
+
+        return _assets;
+    }
+
+    /**
+     * @notice Approve underlying asset with permit, deposit into the Vault and mint Vault shares to `_receiver`.
+     * @param _shares Amount of shares to mint to `_receiver`
+     * @param _receiver Address of the receiver of the vault shares
+     * @param _deadline Timestamp after which the approval is no longer valid
+     * @param _v V part of the secp256k1 signature
+     * @param _r R part of the secp256k1 signature
+     * @param _s S part of the secp256k1 signature
+     * @return uint256 Amount of assets deposited into the Vault.
+     */
+    function mintWithPermit(
+        uint256 _shares,
+        address _receiver,
+        uint256 _deadline,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        external
+        returns (uint256)
+    {
+        uint256 _assets = _beforeMint(_shares, _receiver);
+
+        _permit(IERC20Permit(asset()), msg.sender, address(this), _assets, _deadline, _v, _r, _s);
+        _deposit(msg.sender, _receiver, _assets, _shares);
+
+        return _assets;
+    }
+
+    /**
+     * @notice Deposit assets into the Vault and delegate to the sponsorship address.
+     * @param _assets Amount of assets to deposit
+     * @param _receiver Address of the receiver of the vault shares
+     * @return uint256 Amount of shares minted to `_receiver`.
+     */
+    function sponsor(uint256 _assets, address _receiver) external returns (uint256) {
+        return _sponsor(_assets, _receiver);
+    }
+
+    /**
+     * @notice Deposit assets into the Vault and delegate to the sponsorship address.
+     * @param _assets Amount of assets to deposit
+     * @param _receiver Address of the receiver of the vault shares
+     * @param _deadline Timestamp after which the approval is no longer valid
+     * @param _v V part of the secp256k1 signature
+     * @param _r R part of the secp256k1 signature
+     * @param _s S part of the secp256k1 signature
+     * @return uint256 Amount of shares minted to `_receiver`.
+     */
+    function sponsorWithPermit(
+        uint256 _assets,
+        address _receiver,
+        uint256 _deadline,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        external
+        returns (uint256)
+    {
+        _permit(IERC20Permit(asset()), msg.sender, address(this), _assets, _deadline, _v, _r, _s);
+        return _sponsor(_assets, _receiver);
+    }
 
     /* ============ View Functions ============ */
     /**
@@ -209,6 +329,84 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
     }
     /* ============ Internal Functions ============ */
 
+    /* ============ Permit Functions ============ */
+
+    /**
+     * @notice Approve `_spender` to spend `_assets` of `_owner`'s `_asset` via signature.
+     * @param _asset Address of the asset to approve
+     * @param _owner Address of the owner of the asset
+     * @param _spender Address of the spender of the asset
+     * @param _assets Amount of assets to approve
+     * @param _deadline Timestamp after which the approval is no longer valid
+     * @param _v V part of the secp256k1 signature
+     * @param _r R part of the secp256k1 signature
+     * @param _s S part of the secp256k1 signature
+     */
+    function _permit(
+        IERC20Permit _asset,
+        address _owner,
+        address _spender,
+        uint256 _assets,
+        uint256 _deadline,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        internal
+    {
+        _asset.permit(_owner, _spender, _assets, _deadline, _v, _r, _s);
+    }
+
+    /* ============ Conversion Functions ============ */
+
+    /// @inheritdoc ERC4626
+    function _convertToShares(
+        uint256 _assets,
+        Math.Rounding _rounding
+    )
+        internal
+        view
+        virtual
+        override
+        returns (uint256)
+    {
+        uint256 _exchangeRate = _currentExchangeRate();
+
+        return (_assets == 0 || _exchangeRate == 0) ? _assets : _assets.mulDiv(_assetUnit, _exchangeRate, _rounding);
+    }
+
+    /// @inheritdoc ERC4626
+    function _convertToAssets(
+        uint256 _shares,
+        Math.Rounding _rounding
+    )
+        internal
+        view
+        virtual
+        override
+        returns (uint256)
+    {
+        return _convertToAssets(_shares, _currentExchangeRate(), _rounding);
+    }
+
+    /**
+     * @notice Convert `_shares` to `_assets`.
+     * @param _shares Amount of shares to convert
+     * @param _exchangeRate Exchange rate used to convert `_shares`
+     * @param _rounding Rounding mode (i.e. down or up)
+     */
+    function _convertToAssets(
+        uint256 _shares,
+        uint256 _exchangeRate,
+        Math.Rounding _rounding
+    )
+        internal
+        view
+        returns (uint256)
+    {
+        return (_shares == 0 || _exchangeRate == 0) ? _shares : _shares.mulDiv(_exchangeRate, _assetUnit, _rounding);
+    }
+
     /* ============ Deposit Functions ============ */
 
     /**
@@ -247,7 +445,7 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
         }
 
         _yieldVault.deposit(_assets, address(this));
-        _mint(_receiver, _shares);
+        __mint(_receiver, _shares);
 
         emit Deposit(_caller, _receiver, _assets, _shares);
     }
@@ -279,6 +477,87 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
         emit Sponsor(msg.sender, _receiver, _assets, _shares);
 
         return _shares;
+    }
+
+    /* ============ State Functions ============ */
+
+    /// @notice Update exchange rate with the current exchange rate.
+    function _updateExchangeRate() internal {
+        _lastRecordedExchangeRate = _currentExchangeRate();
+    }
+
+    /**
+     * // TODO: test well these functions
+     * because pooltogether uses a OZ v4 and these functions have virtual override
+     * but this contract uses OZ v5, then just remove the override keyword
+     * that means this contract have both _mint() and __mint() functions
+     */
+
+    /**
+     * @notice Creates `_shares` tokens and assigns them to `_receiver`, increasing the total supply.
+     * @dev Emits a {Transfer} event with `from` set to the zero address.
+     * @dev `_receiver` cannot be the zero address.
+     * @dev Updates the exchange rate.
+     */
+    function __mint(address _receiver, uint256 _shares) internal {
+        _twabController.mint(_receiver, uint96(_shares));
+        _updateExchangeRate();
+
+        emit Transfer(address(0), _receiver, _shares);
+    }
+
+    /**
+     * @notice Destroys `_shares` tokens from `_owner`, reducing the total supply.
+     * @dev Emits a {Transfer} event with `to` set to the zero address.
+     * @dev `_owner` cannot be the zero address.
+     * @dev `_owner` must have at least `_shares` tokens.
+     * @dev Updates the exchange rate.
+     */
+    function __burn(address _owner, uint256 _shares) internal {
+        _twabController.burn(_owner, uint96(_shares));
+        _updateExchangeRate();
+
+        emit Transfer(_owner, address(0), _shares);
+    }
+
+    /**
+     * @notice Updates `_from` and `_to` TWAB balance for a transfer.
+     * @dev `_from` cannot be the zero address.
+     * @dev `_to` cannot be the zero address.
+     * @dev `_from` must have a balance of at least `_shares`.
+     */
+    function __transfer(address _from, address _to, uint256 _shares) internal {
+        _twabController.transfer(_from, _to, uint96(_shares));
+
+        emit Transfer(_from, _to, _shares);
+    }
+
+    /**
+     * @notice Calculate exchange rate between the amount of assets withdrawable from the YieldVault
+     *         and the amount of shares minted by this Vault.
+     * @dev We exclude the amount of yield generated by the YieldVault, so user can only withdraw their share of
+     * deposits.
+     *      Except when the vault is undercollateralized, in this case, any unclaim yield fee is included in the
+     * calculation.
+     * @dev We start with an exchange rate of 1 which is equal to 1 underlying asset unit.
+     * @return uint256 Exchange rate
+     */
+    function _currentExchangeRate() internal view returns (uint256) {
+        uint256 _totalSupplyAmount = _totalSupply();
+        uint256 _totalSupplyToAssets =
+            _convertToAssets(_totalSupplyAmount, _lastRecordedExchangeRate, Math.Rounding.Floor);
+
+        uint256 _withdrawableAssets = _yieldVault.maxWithdraw(address(this));
+
+        if (_withdrawableAssets > _totalSupplyToAssets) {
+            _withdrawableAssets = _withdrawableAssets - (_withdrawableAssets - _totalSupplyToAssets);
+        }
+
+        if (_totalSupplyAmount != 0 && _withdrawableAssets != 0) {
+            return _withdrawableAssets.mulDiv(_assetUnit, _totalSupplyAmount, Math.Rounding.Floor);
+        }
+
+        return _assetUnit;
     }
 
     /**
