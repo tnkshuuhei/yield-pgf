@@ -23,6 +23,12 @@ error OwnerZeroAddress();
 /// @param feePrecision The fee precision
 error YieldFeePercentageGTPrecision(uint256 yieldFeePercentage, uint256 feePrecision);
 
+/// @notice Emitted when the amount of shares being minted to receiver is greater than the max amount allowed
+/// @param shares The shares being minted
+/// @param receiver The receiver address
+/// @param max The max amount of shares that can be minted to the receiver
+error MintGTMax(uint256 shares, address receiver, uint256 max);
+
 contract Vault is ERC4626, ERC20Permit, Ownable {
     using Math for uint256;
     using SafeERC20 for IERC20;
@@ -52,6 +58,16 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
         uint256 yieldFeePercentage,
         address owner
     );
+
+    /**
+     * @notice Emitted when a user sponsor the Vault.
+     * @param caller Address that called the function
+     * @param receiver Address receiving the Vault shares
+     * @param assets Amount of assets deposited into the Vault
+     * @param shares Amount of shares minted to `receiver`
+     */
+    event Sponsor(address indexed caller, address indexed receiver, uint256 assets, uint256 shares);
+
     /* ============ Variables ============ */
 
     /// @notice Address of the TwabController used to keep track of balances.
@@ -190,6 +206,79 @@ contract Vault is ERC4626, ERC20Permit, Ownable {
     /// @inheritdoc ERC20
     function totalSupply() public view virtual override(ERC20, IERC20) returns (uint256) {
         return _totalSupply();
+    }
+    /* ============ Internal Functions ============ */
+
+    /* ============ Deposit Functions ============ */
+
+    /**
+     * @notice Deposit/mint common workflow.
+     * @dev If there are currently some underlying assets in the vault,
+     *      we only transfer the difference from the user wallet into the vault.
+     *      The difference is calculated this way:
+     *      - if `_vaultAssets` balance is greater than 0 and lower than `_assets`,
+     *        we substract `_vaultAssets` from `_assets` and deposit `_assetsDeposit` amount into the vault
+     *      - if `_vaultAssets` balance is greater than or equal to `_assets`,
+     *        we know the vault has enough underlying assets to fulfill the deposit
+     *        so we don't transfer any assets from the user wallet into the vault
+     */
+    function _deposit(address _caller, address _receiver, uint256 _assets, uint256 _shares) internal virtual override {
+        IERC20 _asset = IERC20(asset());
+        uint256 _vaultAssets = _asset.balanceOf(address(this));
+
+        // If _asset is ERC777, `transferFrom` can trigger a reenterancy BEFORE the transfer happens through the
+        // `tokensToSend` hook. On the other hand, the `tokenReceived` hook, that is triggered after the transfer,
+        // calls the vault, which is assumed not malicious.
+        //
+        // Conclusion: we need to do the transfer before we mint so that any reentrancy would happen before the
+        // assets are transferred and before the shares are minted, which is a valid state.
+
+        // We only need to deposit new assets if there is not enough assets in the vault to fulfill the deposit
+        if (_assets > _vaultAssets) {
+            uint256 _assetsDeposit;
+
+            unchecked {
+                if (_vaultAssets != 0) {
+                    _assetsDeposit = _assets - _vaultAssets;
+                }
+            }
+
+            SafeERC20.safeTransferFrom(_asset, _caller, address(this), _assetsDeposit != 0 ? _assetsDeposit : _assets);
+        }
+
+        _yieldVault.deposit(_assets, address(this));
+        _mint(_receiver, _shares);
+
+        emit Deposit(_caller, _receiver, _assets, _shares);
+    }
+
+    /**
+     * @notice Compute the amount of assets to deposit before minting `_shares`.
+     * @param _shares Amount of shares to mint
+     * @param _receiver Address of the receiver of the vault shares
+     * @return uint256 Amount of assets to deposit.
+     */
+    function _beforeMint(uint256 _shares, address _receiver) internal view returns (uint256) {
+        if (_shares > maxMint(_receiver)) revert MintGTMax(_shares, _receiver, maxMint(_receiver));
+        return _convertToAssets(_shares, Math.Rounding.Ceil);
+    }
+
+    /**
+     * @notice Deposit assets into the Vault and delegate to the sponsorship address.
+     * @param _assets Amount of assets to deposit
+     * @param _receiver Address of the receiver of the vault shares
+     * @return uint256 Amount of shares minted to `_receiver`.
+     */
+    function _sponsor(uint256 _assets, address _receiver) internal returns (uint256) {
+        uint256 _shares = deposit(_assets, _receiver);
+
+        if (_twabController.delegateOf(address(this), _receiver) != _twabController.SPONSORSHIP_ADDRESS()) {
+            _twabController.sponsor(_receiver);
+        }
+
+        emit Sponsor(msg.sender, _receiver, _assets, _shares);
+
+        return _shares;
     }
 
     /**
